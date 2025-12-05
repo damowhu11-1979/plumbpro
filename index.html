@@ -93,6 +93,34 @@
         </main>
     </div>
 
+    <!-- Modals for Summary Output -->
+    <div id="modal-backdrop" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden transition-opacity z-40"></div>
+    <div id="summary-modal" class="fixed inset-0 flex items-center justify-center p-4 z-50 hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div class="p-5 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold text-gray-800 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Invoice Summary
+                </h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition duration-150">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+            </div>
+            <div class="p-5">
+                <div id="summary-output" class="text-gray-700 whitespace-pre-wrap"></div>
+                <div id="summary-loading" class="text-center py-8">
+                    <div class="animate-spin inline-block w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+                    <p class="mt-2 text-blue-500">Generating professional summary...</p>
+                </div>
+                <button onclick="copySummary()" id="copy-summary-btn" class="mt-4 w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 rounded-lg transition duration-150 hidden">
+                    Copy to Clipboard
+                </button>
+                <p id="copy-message" class="text-sm text-green-600 mt-2 hidden text-center"></p>
+            </div>
+        </div>
+    </div>
+
+
     <!-- JavaScript and Firebase Setup -->
     <script type="module">
         // Import Firebase modules
@@ -104,14 +132,14 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-plumbpro-app';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
+        const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=`; // Key will be provided by environment
+
         let db;
         let auth;
         let currentUserId = null;
         let isAuthReady = false;
 
         // --- Voice-to-Text Variables ---
-        // Check for SpeechRecognition support (using webkit prefix for broader compatibility)
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition = null;
         let currentRecordingJobId = null;
@@ -156,7 +184,6 @@
                         setupJobListener();
                         setupFormListener();
                     } else {
-                        // User is signed out (shouldn't happen with anonymous/custom token sign-in)
                         console.error("User signed out unexpectedly.");
                         document.getElementById('user-id').textContent = 'Signed Out';
                     }
@@ -170,9 +197,6 @@
         
         // --- FIREBASE UTILITIES ---
 
-        /**
-         * Returns the Firestore collection reference path for the current user's jobs.
-         */
         function getJobsCollectionRef() {
             if (!db || !currentUserId) {
                 console.error("Database or User ID not available.");
@@ -182,16 +206,12 @@
             return collection(db, `artifacts/${appId}/users/${currentUserId}/jobs`);
         }
 
-        /**
-         * Sets up the real-time listener for jobs using onSnapshot.
-         */
         function setupJobListener() {
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
 
             const q = query(jobsRef);
 
-            // Listen for real-time updates
             onSnapshot(q, (snapshot) => {
                 const jobs = [];
                 snapshot.forEach(doc => {
@@ -202,7 +222,6 @@
                         scheduledTime: data.scheduledTime ? data.scheduledTime.toDate() : new Date(),
                     });
                 });
-                // Sort jobs by scheduled time
                 jobs.sort((a, b) => a.scheduledTime - b.scheduledTime);
                 renderJobs(jobs);
             }, (error) => {
@@ -211,9 +230,6 @@
             });
         }
 
-        /**
-         * Adds a new job document to Firestore.
-         */
         async function addNewJob(jobData) {
             const jobsRef = getJobsCollectionRef();
             const messageEl = document.getElementById('form-message');
@@ -252,9 +268,6 @@
             }
         }
 
-        /**
-         * Updates the status of a specific job.
-         */
         async function updateJobStatus(jobId, newStatus) {
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
@@ -262,15 +275,11 @@
             try {
                 const jobDocRef = doc(jobsRef, jobId);
                 await updateDoc(jobDocRef, { status: newStatus });
-                console.log(`Job ${jobId} status updated to ${newStatus}`);
             } catch (e) {
                 console.error("Error updating status: ", e);
             }
         }
 
-        /**
-         * Updates the job notes for a specific job.
-         */
         async function updateJobNotes(jobId, notes) {
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
@@ -284,9 +293,6 @@
             }
         }
         
-        /**
-         * Deletes a job document from Firestore (implementing Right to Erasure).
-         */
         async function deleteJob(jobId) {
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
@@ -294,17 +300,160 @@
             try {
                 const jobDocRef = doc(jobsRef, jobId);
                 await deleteDoc(jobDocRef);
-                console.log(`Job ${jobId} successfully deleted.`);
             } catch (e) {
                 console.error("Error deleting job:", e);
             }
         }
 
-        // --- VOICE-TO-TEXT LOGIC ---
+        // --- GEMINI API INTEGRATION ---
 
         /**
-         * Setups event listeners for the Speech Recognition API.
+         * Generates a professional invoice summary from raw job notes using the Gemini API.
+         * @param {string} jobNotes - The raw notes dictated or typed by the plumber.
          */
+        async function generateInvoiceSummary(jobId, jobNotes) {
+            showModal();
+            const outputEl = document.getElementById('summary-output');
+            const loadingEl = document.getElementById('summary-loading');
+            const copyBtn = document.getElementById('copy-summary-btn');
+
+            outputEl.innerHTML = '';
+            loadingEl.classList.remove('hidden');
+            copyBtn.classList.add('hidden');
+            document.getElementById('copy-message').classList.add('hidden');
+
+            if (!jobNotes || jobNotes.trim() === '') {
+                loadingEl.classList.add('hidden');
+                outputEl.innerHTML = '<p class="text-red-500">Error: Job notes are empty. Please add notes before generating a summary.</p>';
+                return;
+            }
+
+            const systemPrompt = "You are a professional contractor's assistant. Your task is to transform raw job site notes into a concise, formal, customer-facing invoice summary. Organize the output into three sections using markdown bullet points for clarity: 'Work Performed', 'Materials Used (Inferred)', and 'Recommendations/Next Steps'. Do not include any introductory or concluding sentences. Only output the summary itself.";
+            const userQuery = `Raw Job Notes: ${jobNotes}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+            };
+
+            const apiKey = ""; // Canvas provides the key
+            const apiUrl = `${GEMINI_API_URL}${apiKey}`;
+
+            try {
+                const response = await fetchWithRetry(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                loadingEl.classList.add('hidden');
+                
+                const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                
+                if (generatedText) {
+                    // Convert markdown output (bullets and new lines) to HTML for display
+                    outputEl.innerHTML = formatMarkdownToHtml(generatedText);
+                    copyBtn.classList.remove('hidden');
+                } else {
+                    outputEl.innerHTML = '<p class="text-red-500">Could not generate summary. Please check notes for clarity and try again.</p>';
+                }
+
+            } catch (error) {
+                console.error("Gemini API error:", error);
+                loadingEl.classList.add('hidden');
+                outputEl.innerHTML = `<p class="text-red-500">API Request Failed. Check console for details. (Error: ${error.message})</p>`;
+            }
+        }
+
+        /**
+         * Helper function to perform fetch with exponential backoff.
+         */
+        async function fetchWithRetry(url, options, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) return response;
+                    if (response.status === 429 && i < retries - 1) { // Too many requests
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    const delay = Math.pow(2, i) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        /**
+         * Converts simple markdown list/paragraph structure to HTML for display.
+         */
+        function formatMarkdownToHtml(markdown) {
+            // Replace * with list item bullet
+            let html = markdown.replace(/^\* /gm, '<li>').replace(/\n/g, '<br>');
+            
+            // Add paragraphs for better spacing
+            html = html.split('<br><br>').map(p => `<p class="mb-3">${p}</p>`).join('');
+
+            // Simple handling for headers (if present) and bold
+            html = html.replace(/^(#+)\s*(.*)$/gm, (match, hashes, content) => {
+                const level = hashes.length > 3 ? 3 : hashes.length;
+                return `<h${level} class="font-semibold mt-4 mb-2 text-gray-800 text-lg">${content}</h${level}>`;
+            });
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // Convert list item to unordered list block
+            html = html.replace(/<li>(.*?)(<br>|$)/g, '<li>$1</li>');
+            html = `<ul>${html}</ul>`;
+            
+            return html;
+        }
+
+        // --- MODAL UTILITIES ---
+
+        function showModal() {
+            document.getElementById('modal-backdrop').classList.remove('hidden');
+            document.getElementById('summary-modal').classList.remove('hidden');
+            document.body.style.overflow = 'hidden'; // Prevent background scrolling
+        }
+
+        window.closeModal = function() {
+            document.getElementById('modal-backdrop').classList.add('hidden');
+            document.getElementById('summary-modal').classList.add('hidden');
+            document.body.style.overflow = '';
+        }
+
+        window.copySummary = function() {
+            const summaryText = document.getElementById('summary-output').innerText;
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = summaryText;
+            document.body.appendChild(tempTextArea);
+            tempTextArea.select();
+            
+            try {
+                // document.execCommand('copy') is the fallback for older browsers/environments
+                const successful = document.execCommand('copy');
+                const msg = document.getElementById('copy-message');
+                if (successful) {
+                    msg.textContent = 'Copied to clipboard!';
+                    msg.classList.remove('hidden');
+                } else {
+                    msg.textContent = 'Copy failed. Please select and copy manually.';
+                    msg.classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+            document.body.removeChild(tempTextArea);
+        }
+
+        // --- VOICE-TO-TEXT LOGIC (Unchanged from previous version) ---
+
         function setupVoiceRecognitionListeners() {
             if (!recognition) return;
 
@@ -322,8 +471,6 @@
                 
                 if (currentRecordingJobId) {
                     const notesArea = document.getElementById(`notes-area-${currentRecordingJobId}`);
-                    // Append the final transcript to the existing notes area value
-                    // This handles cases where the user speaks in bursts
                     notesArea.value = notesArea.dataset.currentBase + finalTranscript + interimTranscript;
                 }
             };
@@ -347,13 +494,9 @@
             };
         }
 
-        /**
-         * Starts the voice input process for a specific job.
-         */
         function startVoiceInput(jobId) {
             if (!recognition) return;
 
-            // Stop any previous recording
             if (currentRecordingJobId) {
                 stopVoiceInput();
             }
@@ -362,9 +505,8 @@
             const micButton = document.getElementById(`mic-btn-${jobId}`);
             const statusEl = document.getElementById(`mic-status-${jobId}`);
 
-            // Set the current base text before starting dictation
             notesArea.dataset.currentBase = notesArea.value;
-            notesArea.value += ' '; // Add a space for smooth dictation start
+            notesArea.value += ' ';
             
             currentRecordingJobId = jobId;
             recognition.start();
@@ -372,22 +514,17 @@
             micButton.classList.add('is-recording');
             micButton.innerHTML = '<div class="animate-pulse flex items-center"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-red-100" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg><span class="ml-1 hidden md:inline">Stop & Save</span></div>';
             statusEl.textContent = 'Listening... Click the red button to stop.';
-            statusEl.classList.remove('hidden');
-            statusEl.classList.remove('text-red-500');
+            statusEl.classList.remove('hidden', 'text-red-500');
             statusEl.classList.add('text-blue-500');
         }
 
-        /**
-         * Stops the voice input process.
-         */
         function stopVoiceInput() {
             if (recognition && currentRecordingJobId) {
                 recognition.stop();
                 const statusEl = document.getElementById(`mic-status-${currentRecordingJobId}`);
                 if (statusEl) {
                     statusEl.textContent = 'Recording stopped. Click Save to finalize notes.';
-                    statusEl.classList.remove('hidden');
-                    statusEl.classList.remove('text-blue-500');
+                    statusEl.classList.remove('hidden', 'text-blue-500');
                     statusEl.classList.add('text-green-500');
                 }
             }
@@ -396,12 +533,9 @@
 
         // --- UI RENDERING & LISTENERS ---
 
-        /**
-         * Renders the list of jobs into the UI.
-         */
         function renderJobs(jobs) {
             const container = document.getElementById('jobs-container');
-            container.innerHTML = ''; // Clear existing jobs
+            container.innerHTML = '';
 
             if (jobs.length === 0) {
                 container.innerHTML = `
@@ -457,9 +591,17 @@
                         <h4 class="text-sm font-semibold text-gray-700 mb-2">Job Notes:</h4>
                         <textarea id="${notesAreaId}" rows="3" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" placeholder="Type or dictate job notes..." data-current-base="">${job.notes || ''}</textarea>
                         
-                        <div class="flex justify-end space-x-2 mt-2">
+                        <div class="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-2 mt-2">
+                            <!-- Generate Summary Button -->
+                            <button data-job-id="${job.id}" data-notes-id="${notesAreaId}" class="generate-summary-button bg-purple-500 hover:bg-purple-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center justify-center" title="Generate Invoice Summary">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <span class="hidden md:inline">Invoice Summary</span>
+                            </button>
+
                             <!-- Record Button -->
-                            <button data-job-id="${job.id}" id="${micButtonId}" class="mic-toggle-button bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center" title="Start Voice Input">
+                            <button data-job-id="${job.id}" id="${micButtonId}" class="mic-toggle-button bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center justify-center" title="Start Voice Input">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7v0a7 7 0 01-7-7v0M12 18v3m4-18H8m8 0a4 4 0 01-4 4V3a4 4 0 014 4v0z" />
                                 </svg>
@@ -467,7 +609,7 @@
                             </button>
 
                             <!-- Save Button -->
-                            <button data-job-id="${job.id}" class="save-notes-button bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center" title="Save Notes">
+                            <button data-job-id="${job.id}" class="save-notes-button bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center justify-center" title="Save Notes">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                                 </svg>
@@ -480,7 +622,7 @@
                 container.appendChild(jobElement);
             });
 
-            // Attach event listeners to status, delete, mic, and save buttons
+            // Attach event listeners to status, delete, mic, save, and summary buttons
             document.querySelectorAll('.status-selector').forEach(select => {
                 select.addEventListener('change', (e) => updateJobStatus(e.target.dataset.jobId, e.target.value));
             });
@@ -492,7 +634,6 @@
             document.querySelectorAll('.mic-toggle-button').forEach(button => {
                 button.addEventListener('click', (e) => {
                     const jobId = e.currentTarget.dataset.jobId;
-                    // If this job is currently recording, stop it. Otherwise, start recording.
                     if (currentRecordingJobId === jobId) {
                         stopVoiceInput();
                     } else {
@@ -507,7 +648,6 @@
                     const notesArea = document.getElementById(`notes-area-${jobId}`);
                     
                     if (currentRecordingJobId === jobId) {
-                        // If recording is active, stop it before saving
                         stopVoiceInput();
                     }
                     
@@ -518,6 +658,15 @@
                     statusEl.classList.remove('hidden', 'text-red-500', 'text-blue-500');
                     statusEl.classList.add('text-green-500');
                     setTimeout(() => statusEl.classList.add('hidden'), 3000);
+                });
+            });
+
+            document.querySelectorAll('.generate-summary-button').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const notesArea = document.getElementById(e.currentTarget.dataset.notesId);
+                    // Ensure the current notes are saved or update the Firestore copy locally before summarizing
+                    // For simplicity, we use the value directly from the textarea
+                    generateInvoiceSummary(e.currentTarget.dataset.jobId, notesArea.value);
                 });
             });
         }
