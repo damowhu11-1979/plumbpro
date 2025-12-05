@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlumbPro Dashboard</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter Font -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f9fa;
+        }
+        .status-scheduled { @apply bg-blue-100 text-blue-800; }
+        .status-onsite { @apply bg-yellow-100 text-yellow-800; }
+        .status-completed { @apply bg-green-100 text-green-800; }
+        .is-recording {
+            @apply ring-4 ring-red-300 shadow-xl;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-blue-600 shadow-lg p-4 text-white">
+            <div class="max-w-7xl mx-auto flex justify-between items-center">
+                <h1 class="text-2xl font-bold">💧 PlumbPro Dashboard</h1>
+                <div class="text-sm">
+                    <span class="opacity-80">User:</span>
+                    <span id="user-id" class="font-mono text-xs bg-blue-700 px-2 py-1 rounded-full ml-1">Loading...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="max-w-7xl mx-auto p-4 md:p-8">
+
+            <!-- New Job Card / Form -->
+            <div class="bg-white shadow-xl rounded-xl p-6 mb-8 border border-blue-200">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Schedule New Job
+                </h2>
+                <form id="add-job-form" class="space-y-4">
+                    <div>
+                        <label for="customerName" class="block text-sm font-medium text-gray-700">Customer Name</label>
+                        <input type="text" id="customerName" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
+                    </div>
+                    <div>
+                        <label for="address" class="block text-sm font-medium text-gray-700">Address</label>
+                        <input type="text" id="address" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="scheduledTime" class="block text-sm font-medium text-gray-700">Scheduled Date/Time</label>
+                            <input type="datetime-local" id="scheduledTime" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
+                        </div>
+                        <div>
+                            <label for="description" class="block text-sm font-medium text-gray-700">Description (e.g., Leaky faucet)</label>
+                            <input type="text" id="description" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border">
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 ease-in-out">
+                        Add Job
+                    </button>
+                    <div id="form-message" class="text-sm text-center text-red-500 hidden"></div>
+                </form>
+            </div>
+
+            <!-- Job List / Calendar View -->
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                Today's Job Queue
+            </h2>
+            <div id="mic-api-warning" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4 hidden" role="alert">
+                <strong class="font-bold">Warning!</strong>
+                <span class="block sm:inline">Voice-to-Text requires a modern browser like Chrome or Edge and may not be supported.</span>
+            </div>
+
+            <div id="jobs-container" class="space-y-4">
+                <div class="text-center p-10 bg-white rounded-xl shadow-md" id="loading-indicator">
+                    <div class="animate-spin inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+                    <p class="mt-2 text-gray-500">Loading jobs...</p>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- JavaScript and Firebase Setup -->
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL VARIABLES (Provided by Canvas Environment) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-plumbpro-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        let db;
+        let auth;
+        let currentUserId = null;
+        let isAuthReady = false;
+
+        // --- Voice-to-Text Variables ---
+        // Check for SpeechRecognition support (using webkit prefix for broader compatibility)
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition = null;
+        let currentRecordingJobId = null;
+
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
+        async function initializeFirebase() {
+            if (!firebaseConfig) {
+                document.getElementById('loading-indicator').innerHTML = '<p class="text-red-500">Error: Firebase configuration is missing.</p>';
+                return;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                // Initialize Speech Recognition if supported
+                if (SpeechRecognition) {
+                    recognition = new SpeechRecognition();
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    setupVoiceRecognitionListeners();
+                } else {
+                    document.getElementById('mic-api-warning').classList.remove('hidden');
+                }
+
+                // Set up Authentication
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Listen for Auth State Changes
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        isAuthReady = true;
+                        document.getElementById('user-id').textContent = currentUserId;
+                        setupJobListener();
+                        setupFormListener();
+                    } else {
+                        // User is signed out (shouldn't happen with anonymous/custom token sign-in)
+                        console.error("User signed out unexpectedly.");
+                        document.getElementById('user-id').textContent = 'Signed Out';
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing or authenticating Firebase:", error);
+                document.getElementById('loading-indicator').innerHTML = `<p class="text-red-500">Auth Error: ${error.message}</p>`;
+            }
+        }
+        
+        // --- FIREBASE UTILITIES ---
+
+        /**
+         * Returns the Firestore collection reference path for the current user's jobs.
+         */
+        function getJobsCollectionRef() {
+            if (!db || !currentUserId) {
+                console.error("Database or User ID not available.");
+                return null;
+            }
+            // Use private data path: /artifacts/{appId}/users/{userId}/jobs
+            return collection(db, `artifacts/${appId}/users/${currentUserId}/jobs`);
+        }
+
+        /**
+         * Sets up the real-time listener for jobs using onSnapshot.
+         */
+        function setupJobListener() {
+            const jobsRef = getJobsCollectionRef();
+            if (!jobsRef) return;
+
+            const q = query(jobsRef);
+
+            // Listen for real-time updates
+            onSnapshot(q, (snapshot) => {
+                const jobs = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    jobs.push({
+                        id: doc.id,
+                        ...data,
+                        scheduledTime: data.scheduledTime ? data.scheduledTime.toDate() : new Date(),
+                    });
+                });
+                // Sort jobs by scheduled time
+                jobs.sort((a, b) => a.scheduledTime - b.scheduledTime);
+                renderJobs(jobs);
+            }, (error) => {
+                console.error("Error listening to jobs:", error);
+                document.getElementById('jobs-container').innerHTML = '<p class="text-red-500">Failed to load jobs in real-time.</p>';
+            });
+        }
+
+        /**
+         * Adds a new job document to Firestore.
+         */
+        async function addNewJob(jobData) {
+            const jobsRef = getJobsCollectionRef();
+            const messageEl = document.getElementById('form-message');
+            messageEl.classList.add('hidden');
+
+            if (!jobsRef) {
+                messageEl.textContent = 'System error: Cannot connect to database.';
+                messageEl.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                const scheduledDate = new Date(jobData.scheduledTime);
+                
+                await addDoc(jobsRef, {
+                    customerName: jobData.customerName,
+                    address: jobData.address,
+                    scheduledTime: scheduledDate,
+                    description: jobData.description,
+                    status: 'Scheduled',
+                    notes: '', // Initialize notes field
+                    createdAt: serverTimestamp()
+                });
+
+                document.getElementById('add-job-form').reset();
+                messageEl.textContent = 'Job successfully added!';
+                messageEl.classList.remove('text-red-500');
+                messageEl.classList.add('text-green-600', 'bg-green-100', 'p-2', 'rounded-lg');
+                setTimeout(() => messageEl.classList.add('hidden'), 3000);
+
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                messageEl.textContent = 'Error adding job: ' + e.message;
+                messageEl.classList.add('text-red-500');
+                messageEl.classList.remove('hidden');
+            }
+        }
+
+        /**
+         * Updates the status of a specific job.
+         */
+        async function updateJobStatus(jobId, newStatus) {
+            const jobsRef = getJobsCollectionRef();
+            if (!jobsRef) return;
+
+            try {
+                const jobDocRef = doc(jobsRef, jobId);
+                await updateDoc(jobDocRef, { status: newStatus });
+                console.log(`Job ${jobId} status updated to ${newStatus}`);
+            } catch (e) {
+                console.error("Error updating status: ", e);
+            }
+        }
+
+        /**
+         * Updates the job notes for a specific job.
+         */
+        async function updateJobNotes(jobId, notes) {
+            const jobsRef = getJobsCollectionRef();
+            if (!jobsRef) return;
+
+            try {
+                const jobDocRef = doc(jobsRef, jobId);
+                await updateDoc(jobDocRef, { notes: notes });
+                console.log(`Job ${jobId} notes updated.`);
+            } catch (e) {
+                console.error("Error updating notes: ", e);
+            }
+        }
+        
+        /**
+         * Deletes a job document from Firestore (implementing Right to Erasure).
+         */
+        async function deleteJob(jobId) {
+            const jobsRef = getJobsCollectionRef();
+            if (!jobsRef) return;
+
+            try {
+                const jobDocRef = doc(jobsRef, jobId);
+                await deleteDoc(jobDocRef);
+                console.log(`Job ${jobId} successfully deleted.`);
+            } catch (e) {
+                console.error("Error deleting job:", e);
+            }
+        }
+
+        // --- VOICE-TO-TEXT LOGIC ---
+
+        /**
+         * Setups event listeners for the Speech Recognition API.
+         */
+        function setupVoiceRecognitionListeners() {
+            if (!recognition) return;
+
+            recognition.onresult = (event) => {
+                let interimTranscript = '';
+                let finalTranscript = '';
+                
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                
+                if (currentRecordingJobId) {
+                    const notesArea = document.getElementById(`notes-area-${currentRecordingJobId}`);
+                    // Append the final transcript to the existing notes area value
+                    // This handles cases where the user speaks in bursts
+                    notesArea.value = notesArea.dataset.currentBase + finalTranscript + interimTranscript;
+                }
+            };
+
+            recognition.onerror = (event) => {
+                const statusEl = document.getElementById(`mic-status-${currentRecordingJobId}`);
+                if (statusEl) {
+                    statusEl.textContent = `Mic Error: ${event.error}. Click Save to keep partial notes.`;
+                    statusEl.classList.remove('hidden');
+                }
+                stopVoiceInput();
+            };
+
+            recognition.onend = () => {
+                const button = document.getElementById(`mic-btn-${currentRecordingJobId}`);
+                if (button) {
+                    button.classList.remove('is-recording');
+                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7v0a7 7 0 01-7-7v0M12 18v3m4-18H8m8 0a4 4 0 01-4 4V3a4 4 0 014 4v0z" /></svg><span class="ml-1 hidden md:inline">Record Notes</span>';
+                }
+                currentRecordingJobId = null;
+            };
+        }
+
+        /**
+         * Starts the voice input process for a specific job.
+         */
+        function startVoiceInput(jobId) {
+            if (!recognition) return;
+
+            // Stop any previous recording
+            if (currentRecordingJobId) {
+                stopVoiceInput();
+            }
+
+            const notesArea = document.getElementById(`notes-area-${jobId}`);
+            const micButton = document.getElementById(`mic-btn-${jobId}`);
+            const statusEl = document.getElementById(`mic-status-${jobId}`);
+
+            // Set the current base text before starting dictation
+            notesArea.dataset.currentBase = notesArea.value;
+            notesArea.value += ' '; // Add a space for smooth dictation start
+            
+            currentRecordingJobId = jobId;
+            recognition.start();
+
+            micButton.classList.add('is-recording');
+            micButton.innerHTML = '<div class="animate-pulse flex items-center"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-red-100" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg><span class="ml-1 hidden md:inline">Stop & Save</span></div>';
+            statusEl.textContent = 'Listening... Click the red button to stop.';
+            statusEl.classList.remove('hidden');
+            statusEl.classList.remove('text-red-500');
+            statusEl.classList.add('text-blue-500');
+        }
+
+        /**
+         * Stops the voice input process.
+         */
+        function stopVoiceInput() {
+            if (recognition && currentRecordingJobId) {
+                recognition.stop();
+                const statusEl = document.getElementById(`mic-status-${currentRecordingJobId}`);
+                if (statusEl) {
+                    statusEl.textContent = 'Recording stopped. Click Save to finalize notes.';
+                    statusEl.classList.remove('hidden');
+                    statusEl.classList.remove('text-blue-500');
+                    statusEl.classList.add('text-green-500');
+                }
+            }
+        }
+
+
+        // --- UI RENDERING & LISTENERS ---
+
+        /**
+         * Renders the list of jobs into the UI.
+         */
+        function renderJobs(jobs) {
+            const container = document.getElementById('jobs-container');
+            container.innerHTML = ''; // Clear existing jobs
+
+            if (jobs.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center p-10 bg-white rounded-xl shadow-md border border-gray-200">
+                        <p class="text-gray-500">No jobs currently scheduled. Add your first job above!</p>
+                    </div>
+                `;
+                return;
+            }
+
+            jobs.forEach(job => {
+                const statusClass = `status-${job.status.toLowerCase().replace(' ', '')}`;
+                const scheduledDate = job.scheduledTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                const scheduledTime = job.scheduledTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+                const notesAreaId = `notes-area-${job.id}`;
+                const micButtonId = `mic-btn-${job.id}`;
+
+                const jobElement = document.createElement('div');
+                jobElement.className = 'bg-white shadow-lg rounded-xl p-5 border-l-4 border-blue-500 flex flex-col justify-between items-start transition duration-150 hover:shadow-xl';
+                jobElement.innerHTML = `
+                    <div class="w-full flex justify-between items-start mb-4">
+                        <!-- Job Details -->
+                        <div class="flex-grow">
+                            <p class="text-sm font-semibold text-gray-500">${scheduledDate} at ${scheduledTime}</p>
+                            <h3 class="text-xl font-bold text-gray-900">${job.customerName}</h3>
+                            <p class="text-sm text-gray-600">${job.address}</p>
+                            <p class="text-md mt-1 font-medium text-blue-700">${job.description}</p>
+                        </div>
+                        
+                        <!-- Status and Delete Button -->
+                        <div class="flex flex-col space-y-2 items-end">
+                            <span class="px-3 py-1 text-xs font-medium rounded-full uppercase ${statusClass}">
+                                ${job.status}
+                            </span>
+                            <select data-job-id="${job.id}" class="status-selector bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2 transition duration-150">
+                                <option value="Scheduled" ${job.status === 'Scheduled' ? 'selected' : ''}>Scheduled</option>
+                                <option value="On Site" ${job.status === 'On Site' ? 'selected' : ''}>On Site</option>
+                                <option value="Completed" ${job.status === 'Completed' ? 'selected' : ''}>Completed</option>
+                            </select>
+
+                            <!-- Delete Button (GDPR Right to Erasure) -->
+                            <button data-job-id="${job.id}" class="delete-job-button bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center" title="Delete Job">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Voice-to-Text Notes Section -->
+                    <div class="w-full mt-4 pt-4 border-t border-gray-200">
+                        <h4 class="text-sm font-semibold text-gray-700 mb-2">Job Notes:</h4>
+                        <textarea id="${notesAreaId}" rows="3" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" placeholder="Type or dictate job notes..." data-current-base="">${job.notes || ''}</textarea>
+                        
+                        <div class="flex justify-end space-x-2 mt-2">
+                            <!-- Record Button -->
+                            <button data-job-id="${job.id}" id="${micButtonId}" class="mic-toggle-button bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center" title="Start Voice Input">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7v0a7 7 0 01-7-7v0M12 18v3m4-18H8m8 0a4 4 0 01-4 4V3a4 4 0 014 4v0z" />
+                                </svg>
+                                <span class="ml-1 hidden md:inline">Record Notes</span>
+                            </button>
+
+                            <!-- Save Button -->
+                            <button data-job-id="${job.id}" class="save-notes-button bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg text-sm shadow transition duration-150 flex items-center" title="Save Notes">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span class="ml-1 hidden md:inline">Save Notes</span>
+                            </button>
+                        </div>
+                        <p id="mic-status-${job.id}" class="text-xs text-red-500 mt-1 hidden"></p>
+                    </div>
+                `;
+                container.appendChild(jobElement);
+            });
+
+            // Attach event listeners to status, delete, mic, and save buttons
+            document.querySelectorAll('.status-selector').forEach(select => {
+                select.addEventListener('change', (e) => updateJobStatus(e.target.dataset.jobId, e.target.value));
+            });
+
+            document.querySelectorAll('.delete-job-button').forEach(button => {
+                button.addEventListener('click', (e) => deleteJob(e.currentTarget.dataset.jobId));
+            });
+
+            document.querySelectorAll('.mic-toggle-button').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const jobId = e.currentTarget.dataset.jobId;
+                    // If this job is currently recording, stop it. Otherwise, start recording.
+                    if (currentRecordingJobId === jobId) {
+                        stopVoiceInput();
+                    } else {
+                        startVoiceInput(jobId);
+                    }
+                });
+            });
+
+            document.querySelectorAll('.save-notes-button').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const jobId = e.currentTarget.dataset.jobId;
+                    const notesArea = document.getElementById(`notes-area-${jobId}`);
+                    
+                    if (currentRecordingJobId === jobId) {
+                        // If recording is active, stop it before saving
+                        stopVoiceInput();
+                    }
+                    
+                    updateJobNotes(jobId, notesArea.value);
+                    
+                    const statusEl = document.getElementById(`mic-status-${jobId}`);
+                    statusEl.textContent = 'Notes saved successfully!';
+                    statusEl.classList.remove('hidden', 'text-red-500', 'text-blue-500');
+                    statusEl.classList.add('text-green-500');
+                    setTimeout(() => statusEl.classList.add('hidden'), 3000);
+                });
+            });
+        }
+
+
+        /**
+         * Sets up the event listener for the job submission form.
+         */
+        function setupFormListener() {
+            const form = document.getElementById('add-job-form');
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                const jobData = {
+                    customerName: document.getElementById('customerName').value.trim(),
+                    address: document.getElementById('address').value.trim(),
+                    scheduledTime: document.getElementById('scheduledTime').value,
+                    description: document.getElementById('description').value.trim(),
+                };
+
+                // Basic form validation
+                if (!jobData.customerName || !jobData.address || !jobData.scheduledTime || !jobData.description) {
+                    const messageEl = document.getElementById('form-message');
+                    messageEl.textContent = 'Please fill in all fields.';
+                    messageEl.classList.remove('hidden');
+                    return;
+                }
+
+                addNewJob(jobData);
+            });
+        }
+        
+        // --- START APPLICATION ---
+        window.onload = initializeFirebase;
+    </script>
+</body>
+</html>
