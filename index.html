@@ -86,7 +86,7 @@
             <div id="jobs-container" class="space-y-4">
                 <div class="text-center p-10 bg-white rounded-xl shadow-md" id="loading-indicator">
                     <div class="animate-spin inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full"></div>
-                    <p class="mt-2 text-gray-500">Loading jobs...</p>
+                    <p class="mt-2 text-gray-500">Initializing app configuration...</p>
                 </div>
             </div>
 
@@ -128,18 +128,16 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- IMPORTANT: EXTERNAL HOSTING FALLBACK ---
-        // If running outside the Canvas environment (e.g., GitHub Pages), 
-        // the global variables will be undefined. We provide a default config 
-        // using placeholder values.
+        // --- CONSTANTS AND CONFIGURATION ---
         const PLACEHOLDER_PROJECT_ID = "YOUR_PROJECT_ID";
+        const PLACEHOLDER_API_KEY = "PLACEHOLDER";
         const defaultFirebaseConfig = {
-            apiKey: "PLACEHOLDER", // Invalid key prevents actual auth attempts
-            authDomain: "PLACEHOLDER.firebaseapp.com",
+            apiKey: PLACEHOLDER_API_KEY, 
+            authDomain: "placeholder.firebaseapp.com",
             projectId: PLACEHOLDER_PROJECT_ID,
-            storageBucket: "PLACEHOLDER.appspot.com",
-            messagingSenderId: "PLACEHOLDER",
-            appId: "PLACEHOLDER"
+            storageBucket: "placeholder.appspot.com",
+            messagingSenderId: "placeholder",
+            appId: "placeholder"
         };
         const defaultAppId = 'plumbpro-dashboard-local';
         
@@ -164,40 +162,49 @@
         let currentRecordingJobId = null;
 
         /**
-         * Initializes Firebase or falls back to local storage if config is placeholder.
+         * Sets up the application to run in local, non-persistent mode.
+         * Used when Firebase config is missing or invalid.
+         */
+        function setupLocalMode(message = "Warning: Using local, non-persistent mode.") {
+            console.warn(message);
+            
+            document.getElementById('loading-indicator').innerHTML = `<p class="text-yellow-700 bg-yellow-100 p-3 rounded-lg border border-yellow-300">${message} Data will NOT persist.</p>`;
+            
+            // Manually set auth state to ready to start the application logic
+            currentUserId = 'LOCAL_USER_ID';
+            isAuthReady = true;
+            document.getElementById('user-id').textContent = currentUserId;
+
+            // Load any locally stored jobs (simulated)
+            loadLocalJobs();
+            renderJobs(localJobs); // Render initial state
+
+            setupFormListener();
+            
+            // Initialize Speech Recognition if supported
+            if (SpeechRecognition) {
+                recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                setupVoiceRecognitionListeners();
+            } else {
+                document.getElementById('mic-api-warning').classList.remove('hidden');
+            }
+        }
+
+
+        /**
+         * Initializes Firebase or falls back to local storage if config is invalid.
          */
         async function initializeFirebase() {
-            // Check if we are using the placeholder config
-            const isPlaceholderMode = firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID;
+            // Check for known placeholder values or if the config is clearly invalid/incomplete.
+            const isPlaceholderApi = firebaseConfig.apiKey === PLACEHOLDER_API_KEY || !firebaseConfig.apiKey;
+            const isPlaceholderProject = firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID;
+            const forceLocalMode = isPlaceholderApi || isPlaceholderProject;
 
-            if (isPlaceholderMode) {
-                // --- LOCAL/PLACEHOLDER MODE ---
-                console.warn("Running in Placeholder Mode. Data will not persist or synchronize.");
-                
-                document.getElementById('loading-indicator').innerHTML = '<p class="text-yellow-700 bg-yellow-100 p-3 rounded-lg border border-yellow-300">Warning: Using placeholder config. Data will NOT persist. Replace config for real use.</p>';
-                
-                // Manually set auth state to ready to start the application logic
-                currentUserId = 'LOCAL_USER_ID';
-                isAuthReady = true;
-                document.getElementById('user-id').textContent = currentUserId;
-
-                // Load any locally stored jobs (simulated)
-                loadLocalJobs();
-                renderJobs(localJobs); // Render initial state
-
-                setupFormListener();
-                
-                // Initialize Speech Recognition if supported
-                if (SpeechRecognition) {
-                    recognition = new SpeechRecognition();
-                    recognition.continuous = true;
-                    recognition.interimResults = true;
-                    setupVoiceRecognitionListeners();
-                } else {
-                    document.getElementById('mic-api-warning').classList.remove('hidden');
-                }
-
-                return; // STOP execution of Firebase initialization
+            if (forceLocalMode) {
+                setupLocalMode("Warning: Using placeholder config.");
+                return;
             }
 
             // --- PRODUCTION/CANVAS MODE ---
@@ -206,7 +213,14 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
-                // Initialize Speech Recognition if supported
+                // Set up Authentication
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                
+                // Initialize Speech Recognition after app is up
                 if (SpeechRecognition) {
                     recognition = new SpeechRecognition();
                     recognition.continuous = true;
@@ -214,13 +228,6 @@
                     setupVoiceRecognitionListeners();
                 } else {
                     document.getElementById('mic-api-warning').classList.remove('hidden');
-                }
-
-                // Set up Authentication
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
                 }
 
                 // Listen for Auth State Changes
@@ -238,16 +245,17 @@
                 });
 
             } catch (error) {
-                console.error("Error initializing or authenticating Firebase:", error);
-                document.getElementById('loading-indicator').innerHTML = `<p class="text-red-500">Firebase Error: ${error.message}</p>`;
+                // Catch any failure during Firebase initialization (e.g., malformed config)
+                console.error("Firebase initialization failed:", error);
+                // Display error message and fallback to local mode
+                document.getElementById('loading-indicator').innerHTML = `<p class="text-red-500 bg-red-100 p-3 rounded-lg border border-red-300">CRITICAL ERROR: Firebase initialization failed. ${error.message}.</p>`;
+                setupLocalMode("Firebase failed to initialize. Now running in local, non-persistent mode.");
             }
         }
         
-        // --- LOCAL STORAGE UTILITIES (FOR PLACEHOLDER MODE ONLY) ---
+        // --- LOCAL STORAGE UTILITIES (FOR LOCAL MODE ONLY) ---
         function loadLocalJobs() {
-            // In a real scenario, this would load from localStorage, but 
-            // since localStorage is often disabled in this iframe environment, 
-            // we will just keep an empty array for local job changes.
+            // For simplicity in this environment, we keep the jobs in memory
             localJobs = [];
         }
 
@@ -291,8 +299,8 @@
         }
 
         async function addNewJob(jobData) {
-            // Check for placeholder mode
-            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+            // Check for local mode
+            if (currentUserId === 'LOCAL_USER_ID') {
                 const newId = (localJobIdCounter++).toString();
                 const newJob = {
                     id: newId,
@@ -354,8 +362,8 @@
         }
 
         async function updateJobStatus(jobId, newStatus) {
-             // Check for placeholder mode
-            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+             // Check for local mode
+            if (currentUserId === 'LOCAL_USER_ID') {
                 const job = findJobById(jobId);
                 if (job) {
                     job.status = newStatus;
@@ -376,8 +384,8 @@
         }
 
         async function updateJobNotes(jobId, notes) {
-             // Check for placeholder mode
-            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+             // Check for local mode
+            if (currentUserId === 'LOCAL_USER_ID') {
                 const job = findJobById(jobId);
                 if (job) {
                     job.notes = notes;
@@ -398,8 +406,8 @@
         }
         
         async function deleteJob(jobId) {
-             // Check for placeholder mode
-            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+             // Check for local mode
+            if (currentUserId === 'LOCAL_USER_ID') {
                 localJobs = localJobs.filter(job => job.id !== jobId);
                 renderJobs(localJobs);
                 return;
@@ -416,7 +424,7 @@
             }
         }
 
-        // --- GEMINI API INTEGRATION (Unchanged from previous version) ---
+        // --- GEMINI API INTEGRATION ---
 
         /**
          * Generates a professional invoice summary from raw job notes using the Gemini API.
@@ -525,7 +533,7 @@
             return html;
         }
 
-        // --- MODAL UTILITIES (Unchanged from previous version) ---
+        // --- MODAL UTILITIES ---
 
         function showModal() {
             document.getElementById('modal-backdrop').classList.remove('hidden');
@@ -563,7 +571,7 @@
             document.body.removeChild(tempTextArea);
         }
 
-        // --- VOICE-TO-TEXT LOGIC (Unchanged from previous version) ---
+        // --- VOICE-TO-TEXT LOGIC ---
 
         function setupVoiceRecognitionListeners() {
             if (!recognition) return;
@@ -582,6 +590,7 @@
                 
                 if (currentRecordingJobId) {
                     const notesArea = document.getElementById(`notes-area-${currentRecordingJobId}`);
+                    // Append the current transcription to the base notes
                     notesArea.value = notesArea.dataset.currentBase + finalTranscript + interimTranscript;
                 }
             };
@@ -616,7 +625,8 @@
             const micButton = document.getElementById(`mic-btn-${jobId}`);
             const statusEl = document.getElementById(`mic-status-${jobId}`);
 
-            notesArea.dataset.currentBase = notesArea.value;
+            // Store the current content before starting transcription
+            notesArea.dataset.currentBase = notesArea.value.trim();
             notesArea.value += ' ';
             
             currentRecordingJobId = jobId;
@@ -647,14 +657,14 @@
         function renderJobs(jobs) {
             const container = document.getElementById('jobs-container');
             
-            // Preserve the loading indicator/warning if it exists
+            // Capture the current loading indicator/warning HTML before clearing
             const loadingIndicator = document.getElementById('loading-indicator');
             const currentIndicatorHTML = loadingIndicator ? loadingIndicator.outerHTML : '';
             
             container.innerHTML = '';
 
             if (jobs.length === 0) {
-                container.innerHTML = `
+                container.innerHTML += `
                     <div class="text-center p-10 bg-white rounded-xl shadow-md border border-gray-200">
                         <p class="text-gray-500">No jobs currently scheduled. Add your first job above!</p>
                     </div>
@@ -738,7 +748,7 @@
             });
 
             // Put the warning/loading indicator back at the top if it was there
-            if (loadingIndicator && loadingIndicator.outerHTML.includes('Warning:')) {
+            if (currentIndicatorHTML.includes('Warning:') || currentIndicatorHTML.includes('CRITICAL ERROR:')) {
                  container.innerHTML = currentIndicatorHTML + container.innerHTML;
             }
 
