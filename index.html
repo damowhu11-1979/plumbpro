@@ -128,9 +128,25 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- GLOBAL VARIABLES (Provided by Canvas Environment) ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-plumbpro-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        // --- IMPORTANT: EXTERNAL HOSTING FALLBACK ---
+        // If running outside the Canvas environment (e.g., GitHub Pages), 
+        // the global variables will be undefined. We provide a default config 
+        // to prevent the "Firebase configuration is missing" error.
+        // NOTE: This will use a placeholder database and won't save data 
+        // unless you replace the placeholder values with your actual Firebase config.
+        const defaultFirebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        const defaultAppId = 'plumbpro-dashboard-local';
+
+        // --- GLOBAL VARIABLES (Provided by Canvas Environment or Fallback) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : defaultAppId;
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : defaultFirebaseConfig;
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=`; // Key will be provided by environment
 
@@ -148,9 +164,9 @@
          * Initializes Firebase and authenticates the user.
          */
         async function initializeFirebase() {
-            if (!firebaseConfig) {
-                document.getElementById('loading-indicator').innerHTML = '<p class="text-red-500">Error: Firebase configuration is missing.</p>';
-                return;
+            // Check if we are using the placeholder config and alert the user if so.
+            if (firebaseConfig.projectId === "YOUR_PROJECT_ID") {
+                document.getElementById('loading-indicator').innerHTML = '<p class="text-yellow-700 bg-yellow-100 p-3 rounded-lg border border-yellow-300">Warning: Using placeholder Firebase config. Data will not be saved or synchronized unless updated.</p>';
             }
 
             try {
@@ -170,8 +186,10 @@
 
                 // Set up Authentication
                 if (initialAuthToken) {
+                    // Use custom token if running in the Canvas environment
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
+                    // Sign in anonymously for external hosting or when token is missing
                     await signInAnonymously(auth);
                 }
 
@@ -191,7 +209,8 @@
 
             } catch (error) {
                 console.error("Error initializing or authenticating Firebase:", error);
-                document.getElementById('loading-indicator').innerHTML = `<p class="text-red-500">Auth Error: ${error.message}</p>`;
+                // Display the specific error message when the default config is used and fails (if, for example, the API key is invalid)
+                document.getElementById('loading-indicator').innerHTML = `<p class="text-red-500">Firebase Error: ${error.message}</p>`;
             }
         }
         
@@ -226,7 +245,10 @@
                 renderJobs(jobs);
             }, (error) => {
                 console.error("Error listening to jobs:", error);
-                document.getElementById('jobs-container').innerHTML = '<p class="text-red-500">Failed to load jobs in real-time.</p>';
+                // Only show a general message if not using the placeholder warning already
+                if (firebaseConfig.projectId !== "YOUR_PROJECT_ID") {
+                     document.getElementById('jobs-container').innerHTML = '<p class="text-red-500">Failed to load jobs in real-time.</p>';
+                }
             });
         }
 
@@ -256,14 +278,21 @@
 
                 document.getElementById('add-job-form').reset();
                 messageEl.textContent = 'Job successfully added!';
-                messageEl.classList.remove('text-red-500');
+                messageEl.classList.remove('text-red-500', 'text-yellow-700');
                 messageEl.classList.add('text-green-600', 'bg-green-100', 'p-2', 'rounded-lg');
                 setTimeout(() => messageEl.classList.add('hidden'), 3000);
 
             } catch (e) {
                 console.error("Error adding document: ", e);
-                messageEl.textContent = 'Error adding job: ' + e.message;
-                messageEl.classList.add('text-red-500');
+                // Display error but if it's the placeholder config, use a warning style
+                if (firebaseConfig.projectId === "YOUR_PROJECT_ID") {
+                     messageEl.textContent = 'Warning: Job added, but will NOT be saved due to placeholder config.';
+                     messageEl.classList.remove('text-red-500');
+                     messageEl.classList.add('text-yellow-700', 'bg-yellow-100', 'p-2', 'rounded-lg');
+                } else {
+                    messageEl.textContent = 'Error adding job: ' + e.message;
+                    messageEl.classList.add('text-red-500');
+                }
                 messageEl.classList.remove('hidden');
             }
         }
@@ -535,6 +564,10 @@
 
         function renderJobs(jobs) {
             const container = document.getElementById('jobs-container');
+            
+            // Check if loading indicator has the placeholder warning, and if so, preserve it
+            const currentContent = document.getElementById('loading-indicator').innerHTML;
+            
             container.innerHTML = '';
 
             if (jobs.length === 0) {
@@ -543,7 +576,6 @@
                         <p class="text-gray-500">No jobs currently scheduled. Add your first job above!</p>
                     </div>
                 `;
-                return;
             }
 
             jobs.forEach(job => {
@@ -621,6 +653,12 @@
                 `;
                 container.appendChild(jobElement);
             });
+
+            // Re-check for the placeholder warning and put it back in the list if necessary
+            if (currentContent.includes('Warning: Using placeholder Firebase config')) {
+                 container.innerHTML = `<div id="loading-indicator" class="text-center p-10 bg-white rounded-xl shadow-md">${currentContent}</div>` + container.innerHTML;
+            }
+
 
             // Attach event listeners to status, delete, mic, save, and summary buttons
             document.querySelectorAll('.status-selector').forEach(select => {
