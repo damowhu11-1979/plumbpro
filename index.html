@@ -131,18 +131,21 @@
         // --- IMPORTANT: EXTERNAL HOSTING FALLBACK ---
         // If running outside the Canvas environment (e.g., GitHub Pages), 
         // the global variables will be undefined. We provide a default config 
-        // to prevent the "Firebase configuration is missing" error.
-        // NOTE: This will use a placeholder database and won't save data 
-        // unless you replace the placeholder values with your actual Firebase config.
+        // using placeholder values.
+        const PLACEHOLDER_PROJECT_ID = "YOUR_PROJECT_ID";
         const defaultFirebaseConfig = {
-            apiKey: "YOUR_API_KEY",
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "PLACEHOLDER", // Invalid key prevents actual auth attempts
+            authDomain: "PLACEHOLDER.firebaseapp.com",
+            projectId: PLACEHOLDER_PROJECT_ID,
+            storageBucket: "PLACEHOLDER.appspot.com",
+            messagingSenderId: "PLACEHOLDER",
+            appId: "PLACEHOLDER"
         };
         const defaultAppId = 'plumbpro-dashboard-local';
+        
+        // Local job storage for placeholder mode
+        let localJobs = [];
+        let localJobIdCounter = 1;
 
         // --- GLOBAL VARIABLES (Provided by Canvas Environment or Fallback) ---
         const appId = typeof __app_id !== 'undefined' ? __app_id : defaultAppId;
@@ -161,14 +164,43 @@
         let currentRecordingJobId = null;
 
         /**
-         * Initializes Firebase and authenticates the user.
+         * Initializes Firebase or falls back to local storage if config is placeholder.
          */
         async function initializeFirebase() {
-            // Check if we are using the placeholder config and alert the user if so.
-            if (firebaseConfig.projectId === "YOUR_PROJECT_ID") {
-                document.getElementById('loading-indicator').innerHTML = '<p class="text-yellow-700 bg-yellow-100 p-3 rounded-lg border border-yellow-300">Warning: Using placeholder Firebase config. Data will not be saved or synchronized unless updated.</p>';
+            // Check if we are using the placeholder config
+            const isPlaceholderMode = firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID;
+
+            if (isPlaceholderMode) {
+                // --- LOCAL/PLACEHOLDER MODE ---
+                console.warn("Running in Placeholder Mode. Data will not persist or synchronize.");
+                
+                document.getElementById('loading-indicator').innerHTML = '<p class="text-yellow-700 bg-yellow-100 p-3 rounded-lg border border-yellow-300">Warning: Using placeholder config. Data will NOT persist. Replace config for real use.</p>';
+                
+                // Manually set auth state to ready to start the application logic
+                currentUserId = 'LOCAL_USER_ID';
+                isAuthReady = true;
+                document.getElementById('user-id').textContent = currentUserId;
+
+                // Load any locally stored jobs (simulated)
+                loadLocalJobs();
+                renderJobs(localJobs); // Render initial state
+
+                setupFormListener();
+                
+                // Initialize Speech Recognition if supported
+                if (SpeechRecognition) {
+                    recognition = new SpeechRecognition();
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    setupVoiceRecognitionListeners();
+                } else {
+                    document.getElementById('mic-api-warning').classList.remove('hidden');
+                }
+
+                return; // STOP execution of Firebase initialization
             }
 
+            // --- PRODUCTION/CANVAS MODE ---
             try {
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -186,10 +218,8 @@
 
                 // Set up Authentication
                 if (initialAuthToken) {
-                    // Use custom token if running in the Canvas environment
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
-                    // Sign in anonymously for external hosting or when token is missing
                     await signInAnonymously(auth);
                 }
 
@@ -209,12 +239,23 @@
 
             } catch (error) {
                 console.error("Error initializing or authenticating Firebase:", error);
-                // Display the specific error message when the default config is used and fails (if, for example, the API key is invalid)
                 document.getElementById('loading-indicator').innerHTML = `<p class="text-red-500">Firebase Error: ${error.message}</p>`;
             }
         }
         
-        // --- FIREBASE UTILITIES ---
+        // --- LOCAL STORAGE UTILITIES (FOR PLACEHOLDER MODE ONLY) ---
+        function loadLocalJobs() {
+            // In a real scenario, this would load from localStorage, but 
+            // since localStorage is often disabled in this iframe environment, 
+            // we will just keep an empty array for local job changes.
+            localJobs = [];
+        }
+
+        function findJobById(jobId) {
+            return localJobs.find(job => job.id === jobId);
+        }
+
+        // --- FIREBASE UTILITIES (ONLY USED IN PRODUCTION MODE) ---
 
         function getJobsCollectionRef() {
             if (!db || !currentUserId) {
@@ -245,14 +286,36 @@
                 renderJobs(jobs);
             }, (error) => {
                 console.error("Error listening to jobs:", error);
-                // Only show a general message if not using the placeholder warning already
-                if (firebaseConfig.projectId !== "YOUR_PROJECT_ID") {
-                     document.getElementById('jobs-container').innerHTML = '<p class="text-red-500">Failed to load jobs in real-time.</p>';
-                }
+                document.getElementById('jobs-container').innerHTML = '<p class="text-red-500">Failed to load jobs in real-time.</p>';
             });
         }
 
         async function addNewJob(jobData) {
+            // Check for placeholder mode
+            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+                const newId = (localJobIdCounter++).toString();
+                const newJob = {
+                    id: newId,
+                    ...jobData,
+                    scheduledTime: new Date(jobData.scheduledTime),
+                    status: 'Scheduled',
+                    notes: '',
+                };
+                localJobs.push(newJob);
+                localJobs.sort((a, b) => a.scheduledTime - b.scheduledTime);
+                renderJobs(localJobs);
+
+                document.getElementById('add-job-form').reset();
+                const messageEl = document.getElementById('form-message');
+                messageEl.textContent = 'Job added locally! (Data will not persist)';
+                messageEl.classList.remove('text-red-500', 'text-green-600');
+                messageEl.classList.add('text-yellow-700', 'bg-yellow-100', 'p-2', 'rounded-lg');
+                messageEl.classList.remove('hidden');
+                setTimeout(() => messageEl.classList.add('hidden'), 5000);
+                return;
+            }
+            
+            // Production mode
             const jobsRef = getJobsCollectionRef();
             const messageEl = document.getElementById('form-message');
             messageEl.classList.add('hidden');
@@ -272,7 +335,7 @@
                     scheduledTime: scheduledDate,
                     description: jobData.description,
                     status: 'Scheduled',
-                    notes: '', // Initialize notes field
+                    notes: '',
                     createdAt: serverTimestamp()
                 });
 
@@ -284,20 +347,23 @@
 
             } catch (e) {
                 console.error("Error adding document: ", e);
-                // Display error but if it's the placeholder config, use a warning style
-                if (firebaseConfig.projectId === "YOUR_PROJECT_ID") {
-                     messageEl.textContent = 'Warning: Job added, but will NOT be saved due to placeholder config.';
-                     messageEl.classList.remove('text-red-500');
-                     messageEl.classList.add('text-yellow-700', 'bg-yellow-100', 'p-2', 'rounded-lg');
-                } else {
-                    messageEl.textContent = 'Error adding job: ' + e.message;
-                    messageEl.classList.add('text-red-500');
-                }
+                messageEl.textContent = 'Error adding job: ' + e.message;
+                messageEl.classList.add('text-red-500');
                 messageEl.classList.remove('hidden');
             }
         }
 
         async function updateJobStatus(jobId, newStatus) {
+             // Check for placeholder mode
+            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+                const job = findJobById(jobId);
+                if (job) {
+                    job.status = newStatus;
+                    renderJobs(localJobs);
+                }
+                return;
+            }
+
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
 
@@ -310,6 +376,15 @@
         }
 
         async function updateJobNotes(jobId, notes) {
+             // Check for placeholder mode
+            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+                const job = findJobById(jobId);
+                if (job) {
+                    job.notes = notes;
+                }
+                return;
+            }
+
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
 
@@ -323,6 +398,13 @@
         }
         
         async function deleteJob(jobId) {
+             // Check for placeholder mode
+            if (firebaseConfig.projectId === PLACEHOLDER_PROJECT_ID) {
+                localJobs = localJobs.filter(job => job.id !== jobId);
+                renderJobs(localJobs);
+                return;
+            }
+
             const jobsRef = getJobsCollectionRef();
             if (!jobsRef) return;
 
@@ -334,7 +416,7 @@
             }
         }
 
-        // --- GEMINI API INTEGRATION ---
+        // --- GEMINI API INTEGRATION (Unchanged from previous version) ---
 
         /**
          * Generates a professional invoice summary from raw job notes using the Gemini API.
@@ -443,7 +525,7 @@
             return html;
         }
 
-        // --- MODAL UTILITIES ---
+        // --- MODAL UTILITIES (Unchanged from previous version) ---
 
         function showModal() {
             document.getElementById('modal-backdrop').classList.remove('hidden');
@@ -543,7 +625,7 @@
             micButton.classList.add('is-recording');
             micButton.innerHTML = '<div class="animate-pulse flex items-center"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-red-100" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg><span class="ml-1 hidden md:inline">Stop & Save</span></div>';
             statusEl.textContent = 'Listening... Click the red button to stop.';
-            statusEl.classList.remove('hidden', 'text-red-500');
+            statusEl.classList.remove('hidden', 'text-red-500', 'text-green-500');
             statusEl.classList.add('text-blue-500');
         }
 
@@ -553,7 +635,7 @@
                 const statusEl = document.getElementById(`mic-status-${currentRecordingJobId}`);
                 if (statusEl) {
                     statusEl.textContent = 'Recording stopped. Click Save to finalize notes.';
-                    statusEl.classList.remove('hidden', 'text-blue-500');
+                    statusEl.classList.remove('hidden', 'text-blue-500', 'text-red-500');
                     statusEl.classList.add('text-green-500');
                 }
             }
@@ -565,8 +647,9 @@
         function renderJobs(jobs) {
             const container = document.getElementById('jobs-container');
             
-            // Check if loading indicator has the placeholder warning, and if so, preserve it
-            const currentContent = document.getElementById('loading-indicator').innerHTML;
+            // Preserve the loading indicator/warning if it exists
+            const loadingIndicator = document.getElementById('loading-indicator');
+            const currentIndicatorHTML = loadingIndicator ? loadingIndicator.outerHTML : '';
             
             container.innerHTML = '';
 
@@ -654,9 +737,9 @@
                 container.appendChild(jobElement);
             });
 
-            // Re-check for the placeholder warning and put it back in the list if necessary
-            if (currentContent.includes('Warning: Using placeholder Firebase config')) {
-                 container.innerHTML = `<div id="loading-indicator" class="text-center p-10 bg-white rounded-xl shadow-md">${currentContent}</div>` + container.innerHTML;
+            // Put the warning/loading indicator back at the top if it was there
+            if (loadingIndicator && loadingIndicator.outerHTML.includes('Warning:')) {
+                 container.innerHTML = currentIndicatorHTML + container.innerHTML;
             }
 
 
@@ -693,7 +776,7 @@
                     
                     const statusEl = document.getElementById(`mic-status-${jobId}`);
                     statusEl.textContent = 'Notes saved successfully!';
-                    statusEl.classList.remove('hidden', 'text-red-500', 'text-blue-500');
+                    statusEl.classList.remove('hidden', 'text-red-500', 'text-blue-500', 'text-green-500');
                     statusEl.classList.add('text-green-500');
                     setTimeout(() => statusEl.classList.add('hidden'), 3000);
                 });
@@ -702,7 +785,6 @@
             document.querySelectorAll('.generate-summary-button').forEach(button => {
                 button.addEventListener('click', (e) => {
                     const notesArea = document.getElementById(e.currentTarget.dataset.notesId);
-                    // Ensure the current notes are saved or update the Firestore copy locally before summarizing
                     // For simplicity, we use the value directly from the textarea
                     generateInvoiceSummary(e.currentTarget.dataset.jobId, notesArea.value);
                 });
